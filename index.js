@@ -210,6 +210,10 @@ function updateDeviceStatuses() {
   });
 }
 
+
+app.get("/ping",(req,res)=>{
+  res.json("Hello World");
+})
 // API Route: Serve the latest available data from queue, filter by deviceId if provided
 app.get("/api/data", (req, res) => {
   try {
