@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "@azure/arm-iothub": "^6.3.0",
+    "@azure/cosmos": "^4.2.0",
+    "@azure/identity": "^4.7.0",
+    "@azure/msal-node": "^3.2.3",
+    "azure-iot-common": "^1.13.2",
+    "azure-iot-device": "^1.18.3",
+    "azure-iot-device-mqtt": "^1.16.3",
+    "azure-iothub": "^1.16.5",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "init": "^0.1.2"
+  }
+}

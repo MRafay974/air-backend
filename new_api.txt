@@ -1,0 +1,125 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const { CosmosClient } = require("@azure/cosmos");
+
+// Load connection details from .env
+const endpoint = process.env.COSMOS_ENDPOINT;
+const key = process.env.COSMOS_KEY;
+const databaseId = process.env.DATABASE_ID;
+const containerId = process.env.CONTAINER_ID;
+
+// Verify Environment Variables
+if (!endpoint || !key || !databaseId || !containerId) {
+    console.error("❌ Missing environment variables. Check your .env file.");
+    process.exit(1);
+}
+
+const client = new CosmosClient({ endpoint, key });
+const app = express();
+app.use(cors());
+app.use(express.json()); // Middleware for parsing JSON data
+
+const database = client.database(databaseId);
+const container = database.container(containerId);
+
+// Fetch all devices
+app.get("/api/devices", async (req, res) => {
+    try {
+        const querySpec = {
+            query: "SELECT * FROM c WHERE c.type = 'device'"
+        };
+
+        const { resources: devices } = await container.items.query(querySpec).fetchAll();
+
+        if (!devices || devices.length === 0) {
+            return res.status(404).json({ message: "No devices found" });
+        }
+
+        res.json(devices);
+    } catch (error) {
+        console.error("❌ Error fetching devices:", error.message);
+        res.status(500).json({ error: "Failed to fetch devices" });
+    }
+});
+
+// Fetch all users
+app.get("/api/users", async (req, res) => {
+    try {
+        const querySpec = {
+            query: "SELECT * FROM c WHERE c.type = 'user'"
+        };
+
+        const { resources: users } = await container.items.query(querySpec).fetchAll();
+
+        if (!users || users.length === 0) {
+            return res.status(404).json({ message: "No users found" });
+        }
+
+        res.json(users);
+    } catch (error) {
+        console.error("❌ Error fetching users:", error.message);
+        res.status(500).json({ error: "Failed to fetch users" });
+    }
+});
+
+// Add a new device
+app.post("/api/device", async (req, res) => {
+    const { deviceId, status, sensorData } = req.body;
+
+    if (!deviceId || !status) {
+        return res.status(400).json({ error: "Device ID and status are required" });
+    }
+
+    try {
+        const newDevice = {
+            id: deviceId, // Unique device ID
+            type: "device", // Type field to distinguish between devices and users
+            deviceId,
+            status,
+            sensorData,
+            createdAt: new Date().toISOString()
+        };
+
+        const { resource: createdDevice } = await container.items.create(newDevice);
+
+        res.status(201).json(createdDevice);
+    } catch (error) {
+        console.error("❌ Error adding device:", error.message);
+        res.status(500).json({ error: "Failed to add device" });
+    }
+});
+
+// Add a new user
+app.post("/api/user", async (req, res) => {
+    const { username, email, password, role } = req.body;
+
+    if (!username || !email || !password || !role) {
+        return res.status(400).json({ error: "Username, email, password, and role are required" });
+    }
+
+    try {
+        const newUser = {
+            id: email, // Using email as unique identifier for simplicity
+            type: "user", // Type field to distinguish between users and devices
+            username,
+            email,
+            password, // Ideally, you'd hash the password before storing it
+            role,
+            createdAt: new Date().toISOString()
+        };
+
+        const { resource: createdUser } = await container.items.create(newUser);
+
+        res.status(201).json(createdUser);
+    } catch (error) {
+        console.error("❌ Error adding user:", error.message);
+        res.status(500).json({ error: "Failed to add user" });
+    }
+});
+
+// Start Express Server
+const PORT = 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+});

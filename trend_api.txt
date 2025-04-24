@@ -1,0 +1,25 @@
+// New API Route: Serve historical data for the last hour
+app.get("/api/historical-data", (req, res) => {
+    try {
+        // Get sensor name from query parameters (optional)
+        const sensorName = req.query.sensor;
+        
+        if (sensorName) {
+            // Return data for a specific sensor
+            if (!historicalSensorData[sensorName]) {
+                return res.status(404).json({ message: `No historical data for sensor ${sensorName}` });
+            }
+            
+            return res.json({ 
+                sensor: sensorName, 
+                data: historicalSensorData[sensorName] 
+            });
+        }
+        
+        // Return data for all sensors
+        res.json(historicalSensorData);
+    } catch (error) {
+        console.error("❌ API Error:", error.message);
+        res.status(500).json({ error: "Failed to fetch historical data" });
+    }
+});
