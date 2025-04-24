@@ -211,6 +211,15 @@ function updateDeviceStatuses() {
 }
 
 
+app.get("/test", async (req, res) => {
+  try {
+    const { resources } = await container.items.query("SELECT TOP 1 * FROM c").fetchAll();
+    res.json(resources);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/ping",(req,res)=>{
   res.json("Hello World");
 })
