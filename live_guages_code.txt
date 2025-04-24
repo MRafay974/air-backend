@@ -1,0 +1,184 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const { CosmosClient } = require("@azure/cosmos");
+// const { ClientSecretCredential } = require("@azure/identity");
+// const { IoTHubClient } = require("@azure/arm-iothub");
+const userManagement = require("./userManagement"); // Import the user management routes
+
+
+
+// //credentials for IoT Hub
+// const tenantId = process.env.AZURE_TENANT_ID;
+// const clientId = process.env.AZURE_CLIENT_ID;
+// const clientSecret = process.env.AZURE_CLIENT_SECRET;
+// const subscriptionId = process.env.AZURE_SUBSCRIPTION_ID;
+// const resourceGroupName = process.env.AZURE_RESOURCE_GROUP;
+// const iothubName = process.env.AZURE_IOTHUB_NAME;
+
+// // Initialize Azure IoT Hub Client
+// const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+// const iothubClient = new IoTHubClient(credential, subscriptionId);
+
+
+
+// Load connection details from .env
+const endpoint = process.env.COSMOS_ENDPOINT;
+const key = process.env.COSMOS_KEY;
+const databaseId = process.env.DATABASE_ID;
+const containerId = process.env.CONTAINER_ID;
+
+// Verify Environment Variables
+if (!endpoint || !key || !databaseId || !containerId) {
+    console.error("❌ Missing environment variables. Check your .env file.");
+    process.exit(1);
+}
+
+const client = new CosmosClient({ endpoint, key });
+const app = express();
+app.use(cors());
+app.use(express.json()); // Middleware for parsing JSON data
+
+let latestDataQueue = []; // Queue to store new data
+let lastProcessedTimestamp = 0; // Track last processed timestamp
+const database = client.database(databaseId);
+
+const container = database.container(containerId);
+
+
+// Function to fetch only new values from Cosmos DB in arrival order (FIFO)
+async function getNewData() {
+    try {
+        const database = client.database(databaseId);
+        const container = database.container(containerId);
+
+        const query = `SELECT * FROM c WHERE c._ts > ${lastProcessedTimestamp} ORDER BY c._ts ASC`;
+        const { resources } = await container.items.query(query).fetchAll();
+
+        if (!resources || resources.length === 0) {
+            console.warn("⚠️ No new data available in Cosmos DB.");
+            return [];
+        }
+
+        console.log(`✅ Fetched ${resources.length} new records from Cosmos DB.`);
+
+        // Update last processed timestamp
+        lastProcessedTimestamp = resources[resources.length - 1]._ts;
+
+        return resources.map(item => ({
+            id: item.id,
+            timestamp: item._ts,
+            partitionKey: item.partitionKey,
+            body: decodeBody(item.Body) || {},
+        }));
+    } catch (error) {
+        console.error("❌ Error fetching new data:", error.message);
+        return [];
+    }
+}
+
+// Decode base64-encoded JSON Body
+function decodeBody(encodedBody) {
+    try {
+        const decodedString = Buffer.from(encodedBody, "base64").toString("utf-8");
+        return JSON.parse(decodedString);
+    } catch (error) {
+        console.error("❌ Error decoding body:", error.message);
+        return null;
+    }
+}
+
+// Fetch new data every 5 seconds and enqueue it
+setInterval(async () => {
+    try {
+        const newData = await getNewData();
+        if (newData.length > 0) {
+            latestDataQueue.push(...newData); // Add new records to queue
+            console.log("📡 New data added to queue:", newData);
+        }
+    } catch (error) {
+        console.error("❌ Error processing new data:", error);
+    }
+}, 5000); // Fetch every 5 seconds
+
+// API Route: Serve the latest available data from queue
+app.get("/api/data", (req, res) => {
+    try {
+        if (latestDataQueue.length === 0) {
+            return res.status(200).json({ message: "No new data available yet" });
+        }
+
+        // Get the most recent data and send it to the frontend
+        const latestData = latestDataQueue[latestDataQueue.length - 1];
+        res.json(latestData);
+    } catch (error) {
+        console.error("❌ API Error:", error.message);
+        res.status(500).json({ error: "Failed to fetch data" });
+    }
+});
+
+
+
+
+
+
+
+app.use("/api", userManagement);
+
+
+
+
+
+
+/////------------------------/////////////
+// Fetch device based on `ID` field
+app.get("/api/devices", async (req, res) => {
+    try {
+        console.log("Querying Cosmos DB for device...");
+
+        // Get device ID from query parameters
+        const deviceId = req.query.deviceId; // e.g., /api/devices?deviceId=1
+
+        // If no deviceId is provided, return message stating no device is connected
+        if (!deviceId) {
+            return res.status(404).json({ message: "No device connected" });
+        }
+
+        // Query to fetch only the device with the specified ID (if it exists)
+        const querySpec = {
+            query: "SELECT c.ID, c.status FROM c WHERE c.ID = @deviceId",
+            parameters: [{ name: "@deviceId", value: deviceId }]
+        };
+
+        // Execute the query to fetch the device
+        const { resources: devices } = await container.items.query(querySpec).fetchAll();
+
+        // If no device is found for the given ID
+        if (!devices || devices.length === 0) {
+            return res.status(404).json({ message: `Device with ID ${deviceId} not found` });
+        }
+
+        // Map the result to only include the ID and status
+        const device = devices[0]; // Assuming there's only one device with the given ID
+
+        console.log(`Device with ID ${deviceId} fetched:`, device);
+
+        // Send the device info back to the frontend
+        res.json({
+            id: device.ID,
+            status: device.status
+        });
+
+    } catch (error) {
+        console.error("Error fetching device from Cosmos DB:", error.message);
+        res.status(500).json({ error: "Failed to fetch device from Cosmos DB" });
+    }
+});
+
+
+
+// Start Express Server
+const PORT = 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+});
