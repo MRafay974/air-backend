@@ -210,7 +210,6 @@ function updateDeviceStatuses() {
   });
 }
 
-
 app.get("/api/all-data", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
@@ -221,20 +220,42 @@ app.get("/api/all-data", async (req, res) => {
       continuationToken: continuationToken
     };
     
-    const query = "SELECT * FROM c";
+    const query = "SELECT c.id, c._ts, c.partitionKey, c.Body FROM c";
     const response = await container.items.query(query, options).fetchNext();
     
+    // Process each item to decode the Body
+    const decodedItems = response.resources.map(item => {
+      try {
+        return {
+          id: item.id,
+          timestamp: item._ts,
+          partitionKey: item.partitionKey,
+          decodedBody: decodeBody(item.Body) // Using your existing decodeBody function
+        };
+      } catch (decodeError) {
+        console.error(`Failed to decode item ${item.id}:`, decodeError);
+        return {
+          id: item.id,
+          error: "Failed to decode body",
+          rawBody: item.Body // Include the raw body for debugging
+        };
+      }
+    });
+
     res.json({
-      items: response.resources,
+      items: decodedItems,
       continuationToken: response.continuationToken,
       hasMore: !!response.continuationToken
     });
     
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error in /api/all-data:", error);
+    res.status(500).json({ 
+      error: "Failed to fetch data",
+      details: error.message
+    });
   }
 });
-
 
 
 app.get("/test", async (req, res) => {
