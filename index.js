@@ -211,6 +211,32 @@ function updateDeviceStatuses() {
 }
 
 
+app.get("/api/all-data", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const continuationToken = req.query.token;
+    
+    const options = {
+      maxItemCount: limit,
+      continuationToken: continuationToken
+    };
+    
+    const query = "SELECT * FROM c";
+    const response = await container.items.query(query, options).fetchNext();
+    
+    res.json({
+      items: response.resources,
+      continuationToken: response.continuationToken,
+      hasMore: !!response.continuationToken
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+
 app.get("/test", async (req, res) => {
   try {
     const { resources } = await container.items.query("SELECT TOP 1 * FROM c").fetchAll();
