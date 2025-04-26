@@ -210,6 +210,25 @@ function updateDeviceStatuses() {
   });
 }
 
+
+
+// Show the current queue state
+app.get("/api/debug/queue", (req, res) => {
+  res.json({
+    queueLength: latestDataQueue.length,
+    lastProcessedTimestamp: lastProcessedTimestamp,
+    queueContents: latestDataQueue.slice(-5) // show last 5 items
+  });
+});
+
+// Show historical data structure
+app.get("/api/debug/historical", (req, res) => {
+  res.json({
+    historicalSensorData: Object.keys(historicalSensorData),
+    devicesList: devicesList
+  });
+});
+
 app.get("/api/all-data", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
