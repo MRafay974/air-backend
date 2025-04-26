@@ -450,8 +450,9 @@ app.listen(PORT, async () => {
 app.get("/api/latest-data", async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
-    
-    // First try to get from in-memory queue
+    let result = null;
+
+    // 1. First try to get from in-memory queue
     if (latestDataQueue.length > 0) {
       let filteredData = latestDataQueue;
       
@@ -462,39 +463,45 @@ app.get("/api/latest-data", async (req, res) => {
       }
 
       if (filteredData.length > 0) {
-        return res.json(filteredData[filteredData.length - 1]);
+        result = filteredData[filteredData.length - 1];
       }
     }
 
-    // If queue is empty or no matching device, fetch directly from Cosmos DB
-    const query = deviceId 
-      ? `SELECT TOP 1 * FROM c WHERE c.Body.ID = "${deviceId}" ORDER BY c._ts DESC`
-      : `SELECT TOP 1 * FROM c ORDER BY c._ts DESC`;
-    
-    const { resources } = await container.items.query(query).fetchAll();
+    // 2. If no data in queue, fetch last available from Cosmos DB
+    if (!result) {
+      const query = deviceId 
+        ? `SELECT TOP 1 * FROM c WHERE c.Body.ID = "${deviceId}" ORDER BY c._ts DESC`
+        : `SELECT TOP 1 * FROM c ORDER BY c._ts DESC`;
+      
+      const { resources } = await container.items.query(query).fetchAll();
 
-    if (!resources || resources.length === 0) {
-      return res.status(200).json({ 
-        message: deviceId 
-          ? `No data available for device ${deviceId}`
-          : "No data available in database"
-      });
+      if (resources && resources.length > 0) {
+        const latestRecord = resources[0];
+        result = {
+          id: latestRecord.id,
+          timestamp: latestRecord._ts,
+          partitionKey: latestRecord.partitionKey,
+          body: decodeBody(latestRecord.Body) || {}
+        };
+
+        // Update the queue with this fresh data
+        latestDataQueue.push(result);
+        updateHistoricalData(result);
+      }
     }
 
-    // Process the Cosmos DB item to match your format
-    const latestRecord = resources[0];
-    const processedData = {
-      id: latestRecord.id,
-      timestamp: latestRecord._ts,
-      partitionKey: latestRecord.partitionKey,
-      body: decodeBody(latestRecord.Body) || {}
-    };
+    // 3. Return whatever we found (could be from queue or DB)
+    if (result) {
+      return res.json(result);
+    }
 
-    // Update the queue with this fresh data
-    latestDataQueue.push(processedData);
-    updateHistoricalData(processedData);
+    // 4. If absolutely no data exists anywhere
+    return res.status(200).json({ 
+      message: deviceId 
+        ? `No data available for device ${deviceId} in queue or database`
+        : "No data available in queue or database"
+    });
 
-    res.json(processedData);
   } catch (error) {
     console.error("❌ Error in /api/latest-data:", error);
     res.status(500).json({ 
