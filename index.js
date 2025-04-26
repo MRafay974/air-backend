@@ -928,3 +928,94 @@ app.get("/api/monthly-data", async (req, res) => {
     });
   }
 });
+
+
+
+
+
+// Endpoint for last minute data (last 60 seconds, no aggregation)
+app.get("/api/last-minute-data", async (req, res) => {
+  try {
+    const deviceId = req.query.deviceId;
+    const gasName = req.query.gasName;
+    const limit = parseInt(req.query.limit) || 60; // Default to 60 data points (1 per second)
+    const continuationToken = req.query.token;
+
+    // Calculate time window (last 60 seconds)
+    const now = Date.now();
+    const startTime = now - 60000; // 60 seconds in milliseconds
+
+    // Build Cosmos DB query
+    const querySpec = {
+      query: `
+        SELECT c._ts, c.Body 
+        FROM c 
+        WHERE c._ts >= @startTime
+        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
+        ORDER BY c._ts DESC
+      `,
+      parameters: [
+        { name: '@startTime', value: startTime / 1000 },
+        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
+      ]
+    };
+
+    const options = {
+      maxItemCount: limit,
+      continuationToken
+    };
+
+    const { resources, hasMoreResults } = await container.items
+      .query(querySpec, options)
+      .fetchNext();
+
+    // Process data without aggregation (return raw data points)
+    const processedData = [];
+    resources.forEach(item => {
+      try {
+        const body = decodeBody(item.Body);
+        if (!body?.Readings) return;
+
+        const timestamp = item._ts * 1000; // Convert to milliseconds
+
+        const readings = body.Readings
+          .filter(r => !gasName || r.GasName === gasName)
+          .map(r => ({
+            timestamp,
+            gasName: r.GasName,
+            ppm: typeof r.PPM === 'number' && isFinite(r.PPM) ? r.PPM : 0,
+            unit: r.Unit || 'ppm'
+          }));
+
+        if (readings.length) {
+          processedData.push({
+            timestamp,
+            readings
+          });
+        }
+      } catch (e) {
+        console.error('Error processing item:', e);
+      }
+    });
+
+    // Sort by timestamp (ascending)
+    const sortedData = processedData.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Apply limit
+    const limitedData = sortedData.slice(0, limit);
+
+    res.json({
+      data: limitedData,
+      hasMore: hasMoreResults,
+      continuationToken: options.continuationToken,
+      timeRange: 'last-minute'
+    });
+
+  } catch (error) {
+    console.error("Error in /api/last-minute-data:", error);
+    res.status(500).json({ 
+      error: "Failed to fetch last minute data",
+      details: error.message
+    });
+  }
+});
