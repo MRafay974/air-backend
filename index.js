@@ -277,6 +277,102 @@ app.get("/api/all-data", async (req, res) => {
 });
 
 
+// New optimized endpoint for time-series data
+app.get("/api/sensor-history", async (req, res) => {
+  try {
+    const deviceId = req.query.deviceId;
+    const gasName = req.query.gasName;
+    const timeRange = req.query.range || 'weekly'; // daily, weekly, monthly, yearly
+    const limit = parseInt(req.query.limit) || 500; // Default to 500 points
+    const continuationToken = req.query.token;
+
+    // Calculate time window based on range
+    const now = Date.now();
+    let startTime = now;
+    switch (timeRange.toLowerCase()) {
+      case 'daily': startTime -= 86400000; break;
+      case 'weekly': startTime -= 604800000; break;
+      case 'monthly': startTime -= 2592000000; break;
+      case 'yearly': startTime -= 31536000000; break;
+      default: startTime -= 604800000; // Default to weekly
+    }
+
+    // Build optimized Cosmos DB query
+    const querySpec = {
+      query: `
+        SELECT TOP @limit c._ts, c.Body 
+        FROM c 
+        WHERE c._ts >= @startTime
+        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
+        ORDER BY c._ts DESC
+      `,
+      parameters: [
+        { name: '@limit', value: limit },
+        { name: '@startTime', value: startTime / 1000 },
+        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
+      ]
+    };
+
+    const options = {
+      maxItemCount: limit,
+      continuationToken
+    };
+
+    const { resources, hasMoreResults } = await container.items
+      .query(querySpec, options)
+      .fetchNext();
+
+    // Process data efficiently
+    const processedData = [];
+    const uniqueTimestamps = new Set();
+
+    resources.forEach(item => {
+      try {
+        const body = decodeBody(item.Body);
+        if (!body?.Readings) return;
+
+        const timestamp = item._ts * 1000; // Convert to milliseconds
+        if (uniqueTimestamps.has(timestamp)) return; // Deduplicate
+
+        uniqueTimestamps.add(timestamp);
+
+        const readings = body.Readings
+          .filter(r => !gasName || r.GasName === gasName)
+          .map(r => ({
+            timestamp,
+            gasName: r.GasName,
+            ppm: typeof r.PPM === 'number' ? r.PPM : 0,
+            unit: r.Unit || 'ppm'
+          }));
+
+        if (readings.length) {
+          processedData.push({
+            timestamp,
+            readings
+          });
+        }
+      } catch (e) {
+        console.error('Error processing item:', e);
+      }
+    });
+
+    res.json({
+      data: processedData.sort((a, b) => a.timestamp - b.timestamp), // Ensure chronological order
+      hasMore: hasMoreResults,
+      continuationToken: options.continuationToken,
+      timeRange
+    });
+
+  } catch (error) {
+    console.error("Error in /api/sensor-history:", error);
+    res.status(500).json({ 
+      error: "Failed to fetch historical data",
+      details: error.message
+    });
+  }
+});
+
+
 app.get("/test", async (req, res) => {
   try {
     const { resources } = await container.items.query("SELECT TOP 1 * FROM c").fetchAll();
