@@ -830,105 +830,6 @@ app.get("/api/weekly-data", async (req, res) => {
   }
 });
 
-// Endpoint for monthly data (from earliest record, aggregated by month)
-app.get("/api/monthly-data", async (req, res) => {
-  try {
-    const deviceId = req.query.deviceId;
-    const gasName = req.query.gasName;
-    const limit = parseInt(req.query.limit) || 500; // Default to 500 months
-    const continuationToken = req.query.token;
-
-    // Get the earliest timestamp to determine the start month
-    const earliestTimestamp = await getEarliestTimestamp();
-    const startTime = earliestTimestamp / 1000; // Convert to seconds for query
-
-    // Build Cosmos DB query
-    const querySpec = {
-      query: `
-        SELECT c._ts, c.Body 
-        FROM c 
-        WHERE c._ts >= @startTime
-        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
-        ORDER BY c._ts DESC
-      `,
-      parameters: [
-        { name: '@startTime', value: startTime },
-        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
-      ]
-    };
-
-    const options = {
-      maxItemCount: limit * 100, // Fetch more raw data to aggregate
-      continuationToken
-    };
-
-    const { resources, hasMoreResults } = await container.items
-      .query(querySpec, options)
-      .fetchNext();
-
-    // Process and aggregate data by month
-    const monthlyData = {};
-    resources.forEach(item => {
-      try {
-        const body = decodeBody(item.Body);
-        if (!body?.Readings) return;
-
-        const timestamp = item._ts * 1000; // Convert to milliseconds
-        const date = new Date(timestamp);
-        // Round down to the start of the month
-        const monthStart = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
-
-        body.Readings
-          .filter(r => !gasName || r.GasName === gasName)
-          .forEach(r => {
-            const ppm = typeof r.PPM === 'number' && isFinite(r.PPM) ? r.PPM : 0;
-            if (!monthlyData[monthStart]) {
-              monthlyData[monthStart] = {};
-            }
-            if (!monthlyData[monthStart][r.GasName]) {
-              monthlyData[monthStart][r.GasName] = { sum: 0, count: 0, unit: r.Unit || 'ppm' };
-            }
-            monthlyData[monthStart][r.GasName].sum += ppm;
-            monthlyData[monthStart][r.GasName].count += 1;
-          });
-      } catch (e) {
-        console.error('Error processing item:', e);
-      }
-    });
-
-    // Convert aggregated data to the required format
-    const processedData = Object.keys(monthlyData).map(timestamp => {
-      const readings = Object.keys(monthlyData[timestamp]).map(gas => ({
-        timestamp: parseInt(timestamp),
-        gasName: gas,
-        ppm: monthlyData[timestamp][gas].sum / monthlyData[timestamp][gas].count,
-        unit: monthlyData[timestamp][gas].unit
-      }));
-      return {
-        timestamp: parseInt(timestamp),
-        readings
-      };
-    }).sort((a, b) => a.timestamp - b.timestamp);
-
-    // Apply limit after aggregation
-    const limitedData = processedData.slice(0, limit);
-
-    res.json({
-      data: limitedData,
-      hasMore: hasMoreResults,
-      continuationToken: options.continuationToken,
-      timeRange: 'monthly'
-    });
-
-  } catch (error) {
-    console.error("Error in /api/monthly-data:", error);
-    res.status(500).json({ 
-      error: "Failed to fetch monthly data",
-      details: error.message
-    });
-  }
-});
-
 
 
 
@@ -1015,6 +916,82 @@ app.get("/api/last-minute-data", async (req, res) => {
     console.error("Error in /api/last-minute-data:", error);
     res.status(500).json({ 
       error: "Failed to fetch last minute data",
+      details: error.message
+    });
+  }
+});
+
+
+// Endpoint for last hour data (last 60 minutes, no aggregation)
+app.get("/api/last-hour-data", async (req, res) => {
+  try {
+    const deviceId = req.query.deviceId;
+    const gasName = req.query.gasName;
+
+    // Calculate time window (last 60 minutes)
+    const now = Date.now();
+    const startTime = now - 3600000; // 60 minutes in milliseconds
+
+    // Build Cosmos DB query
+    const querySpec = {
+      query: `
+        SELECT c._ts, c.Body 
+        FROM c 
+        WHERE c._ts >= @startTime
+        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
+        ORDER BY c._ts DESC
+      `,
+      parameters: [
+        { name: '@startTime', value: startTime / 1000 },
+        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
+      ]
+    };
+
+    const { resources } = await container.items
+      .query(querySpec)
+      .fetchAll(); // <-- fetch everything at once, no pagination
+
+    // Process data without aggregation (return raw data points)
+    const processedData = [];
+    resources.forEach(item => {
+      try {
+        const body = decodeBody(item.Body);
+        if (!body?.Readings) return;
+
+        const timestamp = item._ts * 1000; // Convert to milliseconds
+
+        const readings = body.Readings
+          .filter(r => !gasName || r.GasName === gasName)
+          .map(r => ({
+            timestamp,
+            gasName: r.GasName,
+            ppm: typeof r.PPM === 'number' && isFinite(r.PPM) ? r.PPM : 0,
+            unit: r.Unit || 'ppm'
+          }));
+
+        if (readings.length) {
+          processedData.push({
+            timestamp,
+            readings
+          });
+        }
+      } catch (e) {
+        console.error('Error processing item:', e);
+      }
+    });
+
+    // Sort by timestamp (ascending)
+    const sortedData = processedData.sort((a, b) => a.timestamp - b.timestamp);
+
+    res.json({
+      data: sortedData,
+      timeRange: 'last-hour'
+    });
+
+  } catch (error) {
+    console.error("Error in /api/last-hour-data:", error);
+    res.status(500).json({ 
+      error: "Failed to fetch last hour data",
       details: error.message
     });
   }
