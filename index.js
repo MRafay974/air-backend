@@ -830,12 +830,80 @@ app.get("/api/weekly-data", async (req, res) => {
   }
 });
 
+// Endpoint for last minute data (returns only the latest value)
+app.get("/api/last-minute-data", async (req, res) => {
+  try {
+    const deviceId = req.query.deviceId;
+    const gasName = req.query.gasName;
 
+    // Calculate time window (last 60 seconds)
+    const now = Date.now();
+    const startTime = now - 60000; // 60 seconds in milliseconds
+
+    // Build Cosmos DB query to get the most recent document
+    const querySpec = {
+      query: `
+        SELECT TOP 1 c._ts, c.Body 
+        FROM c 
+        WHERE c._ts >= @startTime
+        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
+        ORDER BY c._ts DESC
+      `,
+      parameters: [
+        { name: '@startTime', value: startTime / 1000 },
+        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
+      ]
+    };
+
+    const { resources } = await container.items
+      .query(querySpec)
+      .fetchAll();
+
+    if (resources.length === 0) {
+      return res.status(404).json({ message: "No recent data found" });
+    }
+
+    // Process only the latest data point
+    const latestItem = resources[0];
+    const body = decodeBody(latestItem.Body);
+    const timestamp = latestItem._ts * 1000; // Convert to milliseconds
+
+    if (!body?.Readings) {
+      return res.status(404).json({ message: "No readings in the latest data" });
+    }
+
+    // Filter readings if gasName is specified
+    const readings = body.Readings
+      .filter(r => !gasName || r.GasName === gasName)
+      .map(r => ({
+        gasName: r.GasName,
+        ppm: typeof r.PPM === 'number' && isFinite(r.PPM) ? r.PPM : 0,
+        unit: r.Unit || 'ppm'
+      }));
+
+    if (readings.length === 0) {
+      return res.status(404).json({ 
+        message: gasName 
+          ? `No readings found for gas ${gasName}` 
+          : "No valid readings found"
+      });
+    }
+
+    res.json({
+      timestamp,
+      readings
+    });
+
+  } catch (error) {
+    console.error("Error fetching last minute data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 
 
 // Endpoint for last minute data (last 60 seconds, no aggregation)
-app.get("/api/last-minute-data", async (req, res) => {
+app.get("/api/last-minute-dataaaa", async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
     const gasName = req.query.gasName;
