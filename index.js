@@ -830,7 +830,13 @@ app.get("/api/weekly-data", async (req, res) => {
   }
 });
 
+
+
+//////////////////////////////// updated one with average ////////////
 // Endpoint for last minute data (returns only the latest value)
+
+
+// Endpoint for last minute data (returns average of last 5 points)
 app.get("/api/last-minute-data", async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
@@ -840,10 +846,10 @@ app.get("/api/last-minute-data", async (req, res) => {
     const now = Date.now();
     const startTime = now - 60000; // 60 seconds in milliseconds
 
-    // Build Cosmos DB query to get the most recent document
+    // Build Cosmos DB query to get the last 5 documents
     const querySpec = {
       query: `
-        SELECT TOP 1 c._ts, c.Body 
+        SELECT TOP 5 c._ts, c.Body 
         FROM c 
         WHERE c._ts >= @startTime
         ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
@@ -855,33 +861,56 @@ app.get("/api/last-minute-data", async (req, res) => {
       ]
     };
 
-    const { resources } = await container.items
-      .query(querySpec)
-      .fetchAll();
+    const { resources } = await container.items.query(querySpec).fetchAll();
 
     if (resources.length === 0) {
       return res.status(404).json({ message: "No recent data found" });
     }
 
-    // Process only the latest data point
-    const latestItem = resources[0];
-    const body = decodeBody(latestItem.Body);
-    const timestamp = latestItem._ts * 1000; // Convert to milliseconds
+    // Process all data points to calculate averages
+    const readingsMap = new Map();
 
-    if (!body?.Readings) {
-      return res.status(404).json({ message: "No readings in the latest data" });
-    }
+    resources.forEach(item => {
+      try {
+        const body = decodeBody(item.Body);
+        if (!body?.Readings) return;
 
-    // Filter readings if gasName is specified
-    const readings = body.Readings
-      .filter(r => !gasName || r.GasName === gasName)
-      .map(r => ({
-        gasName: r.GasName,
-        ppm: typeof r.PPM === 'number' && isFinite(r.PPM) ? r.PPM : 0,
-        unit: r.Unit || 'ppm'
-      }));
+        body.Readings.forEach(reading => {
+          if (gasName && reading.GasName !== gasName) return;
 
-    if (readings.length === 0) {
+          if (!readingsMap.has(reading.GasName)) {
+            readingsMap.set(reading.GasName, {
+              sum: 0,
+              count: 0,
+              unit: reading.Unit || 'ppm',
+              timestamps: []
+            });
+          }
+
+          const gasData = readingsMap.get(reading.GasName);
+          if (typeof reading.PPM === 'number' && isFinite(reading.PPM)) {
+            gasData.sum += reading.PPM;
+            gasData.count++;
+            gasData.timestamps.push(new Date(item._ts * 1000).toISOString());
+          }
+        });
+      } catch (e) {
+        console.error('Error processing item:', e);
+      }
+    });
+
+    // Calculate averages and prepare response
+    const averagedReadings = [];
+    readingsMap.forEach((data, name) => {
+      averagedReadings.push({
+        GasName: name,
+        PPM: data.count > 0 ? data.sum / data.count : 0,
+        Unit: data.unit,
+        timestamp: data.timestamps[0] || null
+      });
+    });
+
+    if (averagedReadings.length === 0) {
       return res.status(404).json({ 
         message: gasName 
           ? `No readings found for gas ${gasName}` 
@@ -889,16 +918,49 @@ app.get("/api/last-minute-data", async (req, res) => {
       });
     }
 
-    res.json({
-      timestamp,
-      readings
-    });
+    // Get the latest document as the base for the response
+    const latestItem = resources[0];
+    const latestBody = decodeBody(latestItem.Body);
+
+    const response = {
+      id: latestItem.id || "unknown",
+      timestamp: latestItem._ts,
+      body: {
+        msgCount: latestBody.msgCount || resources.length,
+        ID: latestBody.ID || (deviceId ? parseInt(deviceId) : 0),
+        Type: latestBody.Type || 0,
+        Readings: averagedReadings
+      }
+    };
+
+    res.json(response);
 
   } catch (error) {
     console.error("Error fetching last minute data:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
