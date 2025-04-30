@@ -902,9 +902,10 @@ app.get("/api/last-minute-data", async (req, res) => {
     // Calculate averages and prepare response
     const averagedReadings = [];
     readingsMap.forEach((data, name) => {
+      const averagePPM = data.count > 0 ? data.sum / data.count : 0;
       averagedReadings.push({
         GasName: name,
-        PPM: data.count > 0 ? data.sum / data.count : 0,
+        PPM: Math.round(averagePPM * 100) / 100, // Round to 2 decimal places
         Unit: data.unit,
         timestamp: data.timestamps[0] || null
       });
@@ -940,8 +941,6 @@ app.get("/api/last-minute-data", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-
-
 
 
 
