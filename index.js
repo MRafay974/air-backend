@@ -842,107 +842,101 @@ app.get("/api/last-minute-data", async (req, res) => {
     const deviceId = req.query.deviceId;
     const gasName = req.query.gasName;
 
-    // Calculate time window (last 60 seconds)
-    const now = Date.now();
-    const startTime = now - 60000; // 60 seconds in milliseconds
+    // Validate deviceId if provided
+    if (deviceId && !/^[a-zA-Z0-9-_]+$/.test(deviceId)) {
+      return res.status(400).json({
+        status: "ERROR",
+        error: "Invalid deviceId format",
+      });
+    }
 
-    // Build Cosmos DB query to get the last 5 documents
+    // Validate gasName if provided (optional, adjust regex as needed)
+    if (gasName && !/^[a-zA-Z0-9-_ ]+$/.test(gasName)) {
+      return res.status(400).json({
+        status: "ERROR",
+        error: "Invalid gasName format",
+      });
+    }
+
+    // Build Cosmos DB query to get the last available record
     const querySpec = {
       query: `
-        SELECT TOP 5 c._ts, c.Body 
-        FROM c 
-        WHERE c._ts >= @startTime
-        ${deviceId ? `AND c.Body.ID = @deviceId` : ''}
+        SELECT TOP 1 c.id, c._ts, c.partitionKey, c.Body
+        FROM c
+        ${deviceId ? "WHERE c.Body.ID = @deviceId" : ""}
         ORDER BY c._ts DESC
       `,
-      parameters: [
-        { name: '@startTime', value: startTime / 1000 },
-        ...(deviceId ? [{ name: '@deviceId', value: deviceId }] : [])
-      ]
+      parameters: deviceId ? [{ name: "@deviceId", value: deviceId }] : [],
     };
+
+    console.log(`Executing query for ${deviceId ? `deviceId: ${deviceId}` : "all devices"} to fetch last available record`);
 
     const { resources } = await container.items.query(querySpec).fetchAll();
 
     if (resources.length === 0) {
-      return res.status(404).json({ message: "No recent data found" });
-    }
-
-    // Process all data points to calculate averages
-    const readingsMap = new Map();
-
-    resources.forEach(item => {
-      try {
-        const body = decodeBody(item.Body);
-        if (!body?.Readings) return;
-
-        body.Readings.forEach(reading => {
-          if (gasName && reading.GasName !== gasName) return;
-
-          if (!readingsMap.has(reading.GasName)) {
-            readingsMap.set(reading.GasName, {
-              sum: 0,
-              count: 0,
-              unit: reading.Unit || 'ppm',
-              timestamps: []
-            });
-          }
-
-          const gasData = readingsMap.get(reading.GasName);
-          if (typeof reading.PPM === 'number' && isFinite(reading.PPM)) {
-            gasData.sum += reading.PPM;
-            gasData.count++;
-            gasData.timestamps.push(new Date(item._ts * 1000).toISOString());
-          }
-        });
-      } catch (e) {
-        console.error('Error processing item:', e);
-      }
-    });
-
-    // Calculate averages and prepare response
-    const averagedReadings = [];
-    readingsMap.forEach((data, name) => {
-      const averagePPM = data.count > 0 ? data.sum / data.count : 0;
-      averagedReadings.push({
-        GasName: name,
-        PPM: Math.round(averagePPM * 100) / 100, // Round to 2 decimal places
-        Unit: data.unit,
-        timestamp: data.timestamps[0] || null
-      });
-    });
-
-    if (averagedReadings.length === 0) {
-      return res.status(404).json({ 
-        message: gasName 
-          ? `No readings found for gas ${gasName}` 
-          : "No valid readings found"
+      console.log(`No data found for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
+      return res.status(404).json({
+        status: "NO_DATA",
+        message: deviceId
+          ? `No data available for device ${deviceId}`
+          : "No data available in database",
       });
     }
 
-    // Get the latest document as the base for the response
+    // Process the latest record
     const latestItem = resources[0];
-    const latestBody = decodeBody(latestItem.Body);
+    const latestBody = decodeBody(latestItem.Body) || {};
 
-    const response = {
-      id: latestItem.id || "unknown",
-      timestamp: latestItem._ts,
-      body: {
-        msgCount: latestBody.msgCount || resources.length,
-        ID: latestBody.ID || (deviceId ? parseInt(deviceId) : 0),
-        Type: latestBody.Type || 0,
-        Readings: averagedReadings
+    // Filter readings by gasName if provided
+    let readings = latestBody.Readings || [];
+    if (gasName) {
+      readings = readings.filter((reading) => reading.GasName === gasName);
+      if (readings.length === 0) {
+        console.log(`No readings found for gas ${gasName} in latest record for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
+        return res.status(404).json({
+          status: "NO_DATA",
+          message: `No readings found for gas ${gasName} in the latest record`,
+        });
       }
+    }
+
+    // Ensure readings have required fields and valid PPM values
+    const formattedReadings = readings.map((reading) => ({
+      GasName: reading.GasName || "Unknown",
+      PPM: typeof reading.PPM === "number" && isFinite(reading.PPM) ? Math.round(reading.PPM * 100) / 100 : 0,
+      Unit: reading.Unit || "ppm",
+      timestamp: new Date(latestItem._ts * 1000).toISOString(),
+    }));
+
+    // Prepare response
+    const response = {
+      status: "SUCCESS",
+      message: `Fetched last available record${deviceId ? ` for device ${deviceId}` : ""}${gasName ? ` for gas ${gasName}` : ""}`,
+      data: {
+        id: latestItem.id || "unknown",
+        timestamp: latestItem._ts,
+        body: {
+          msgCount: latestBody.msgCount || 1, // Default to 1 for a single record
+          ID: latestBody.ID || (deviceId ? deviceId : "0"),
+          Type: latestBody.Type || 0,
+          Readings: formattedReadings,
+        },
+      },
     };
+
+    console.log(`Successfully fetched last record for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}${gasName ? `, gas: ${gasName}` : ""}`);
 
     res.json(response);
 
   } catch (error) {
-    console.error("Error fetching last minute data:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("❌ Error fetching last available data:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      error: "Failed to fetch last available data",
+      details: error.message,
+    });
   }
 });
-
-
 
 
 
