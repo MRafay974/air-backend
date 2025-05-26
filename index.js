@@ -1201,7 +1201,6 @@ app.get("/api/last-hour-data", async (req, res) => {
 
 /// applying different changes for Open House
 
-
 app.get("/api/latest-data", async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
@@ -1211,11 +1210,11 @@ app.get("/api/latest-data", async (req, res) => {
       return res.status(400).json({ error: "Invalid deviceId format" });
     }
 
-    // Query Cosmos DB for the latest record
+    // Query Cosmos DB for the 20th record from the last
     const querySpec = {
       query: deviceId
-        ? "SELECT TOP 1 * FROM c WHERE c.Body.ID = @deviceId ORDER BY c._ts DESC"
-        : "SELECT TOP 1 * FROM c ORDER BY c._ts DESC",
+        ? "SELECT * FROM c WHERE c.Body.ID = @deviceId ORDER BY c._ts DESC OFFSET 19 LIMIT 1"
+        : "SELECT * FROM c ORDER BY c._ts DESC OFFSET 19 LIMIT 1",
       parameters: deviceId ? [{ name: "@deviceId", value: deviceId }] : [],
     };
 
@@ -1223,39 +1222,19 @@ app.get("/api/latest-data", async (req, res) => {
 
     let result = null;
     if (resources && resources.length > 0) {
-      const latestRecord = resources[0];
-      const decodedBody = decodeBody(latestRecord.Body) || {};
-
-      // Ensure required fields are present, set to null if missing
-      const requiredFields = [
-        "H2",
-        "CH4",
-        "CO",
-        "Alcohol",
-        "C2H5OH",
-        "Dust Concentrati",
-        "Humidity",
-        "Temperature",
-      ];
-      const formattedBody = {};
-      requiredFields.forEach((field) => {
-        formattedBody[field] = decodedBody[field] !== undefined ? decodedBody[field] : null;
-      });
-      // Include device ID if present
-      formattedBody.ID = decodedBody.ID || deviceId || null;
-
+      const targetRecord = resources[0];
       result = {
-        id: latestRecord.id,
-        timestamp: latestRecord._ts,
-        partitionKey: latestRecord.partitionKey,
-        body: formattedBody,
+        id: targetRecord.id,
+        timestamp: targetRecord._ts,
+        partitionKey: targetRecord.partitionKey,
+        body: decodeBody(targetRecord.Body) || {},
       };
 
-      // Update the in-memory queue
+      // Update the in-memory queue (optional, as a cache)
       latestDataQueue = latestDataQueue.filter(
         (data) => data.body && data.body.ID && data.body.ID.toString() !== deviceId
       ); // Remove old data for this device
-      latestDataQueue.push(result);
+      latestDataQueue.push(result); // Add new data
 
       // Limit queue size to prevent memory issues
       const MAX_QUEUE_SIZE = 100;
@@ -1274,14 +1253,14 @@ app.get("/api/latest-data", async (req, res) => {
 
     return res.status(200).json({
       message: deviceId
-        ? `No data available for device ${deviceId} in database`
-        : "No data available in database",
+        ? `No data available for device ${deviceId} at the 20th position from the last`
+        : "No data available at the 20th position from the last in database",
     });
 
   } catch (error) {
     console.error("❌ Error in /api/latest-data:", error);
     return res.status(500).json({
-      error: "Failed to fetch latest data",
+      error: "Failed to fetch data at 20th position from the last",
       details: error.message,
     });
   }
