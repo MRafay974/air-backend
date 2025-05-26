@@ -1208,7 +1208,6 @@ app.get("/api/health", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
-
 app.get("/api/latest-data", async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
@@ -1221,15 +1220,15 @@ app.get("/api/latest-data", async (req, res) => {
       });
     }
 
-    // Query Cosmos DB for the 20th record from the last
+    // Query Cosmos DB for the 100th record from the last
     const querySpec = {
       query: deviceId
-        ? "SELECT * FROM c WHERE c.Body.ID = @deviceId ORDER BY c._ts DESC OFFSET 19 LIMIT 1"
-        : "SELECT * FROM c ORDER BY c._ts DESC OFFSET 19 LIMIT 1",
+        ? "SELECT * FROM c WHERE c.Body.ID = @deviceId ORDER BY c._ts DESC OFFSET 99 LIMIT 1"
+        : "SELECT * FROM c ORDER BY c._ts DESC OFFSET 99 LIMIT 1",
       parameters: deviceId ? [{ name: "@deviceId", value: deviceId }] : [],
     };
 
-    console.log(`Executing query for ${deviceId ? `deviceId: ${deviceId}` : "all devices"} to fetch 20th record from the last`);
+    console.log(`Executing query for ${deviceId ? `deviceId: ${deviceId}` : "all devices"} to fetch 100th record from the last`);
 
     const { resources } = await container.items.query(querySpec).fetchAll();
 
@@ -1258,31 +1257,31 @@ app.get("/api/latest-data", async (req, res) => {
       // Update historical data (assuming this function exists)
       updateHistoricalData(result);
 
-      console.log(`Successfully fetched 20th record for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
+      console.log(`Successfully fetched 100th record for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
 
       // Return the result with status message
       return res.json({
         status: "SUCCESS",
-        message: `Fetched 20th record from the last${deviceId ? ` for device ${deviceId}` : ""}`,
+        message: `Fetched 100th record from the last${deviceId ? ` for device ${deviceId}` : ""}`,
         data: result,
       });
     }
 
-    console.log(`No data found at 20th position for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
+    console.log(`No data found at 100th position for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
 
     // Return no-data message with status
     return res.status(200).json({
       status: "NO_DATA",
       message: deviceId
-        ? `No data available for device ${deviceId} at the 20th position from the last`
-        : "No data available at the 20th position from the last in database",
+        ? `No data available for device ${deviceId} at the 100th position from the last`
+        : "No data available at the 100th position from the last in database",
     });
 
   } catch (error) {
     console.error("❌ Error in /api/latest-data:", error);
     return res.status(500).json({
       status: "ERROR",
-      error: "Failed to fetch data at 20th position from the last",
+      error: "Failed to fetch data at 100th position from the last",
       details: error.message,
     });
   }
