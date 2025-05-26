@@ -1200,6 +1200,14 @@ app.get("/api/last-hour-data", async (req, res) => {
 
 
 /// applying different changes for Open House
+// Health check endpoint to verify API is running
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    message: "API is running correctly",
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.get("/api/latest-data", async (req, res) => {
   try {
@@ -1207,7 +1215,10 @@ app.get("/api/latest-data", async (req, res) => {
 
     // Validate deviceId if provided
     if (deviceId && !/^[a-zA-Z0-9-_]+$/.test(deviceId)) {
-      return res.status(400).json({ error: "Invalid deviceId format" });
+      return res.status(400).json({
+        status: "ERROR",
+        error: "Invalid deviceId format",
+      });
     }
 
     // Query Cosmos DB for the 20th record from the last
@@ -1217,6 +1228,8 @@ app.get("/api/latest-data", async (req, res) => {
         : "SELECT * FROM c ORDER BY c._ts DESC OFFSET 19 LIMIT 1",
       parameters: deviceId ? [{ name: "@deviceId", value: deviceId }] : [],
     };
+
+    console.log(`Executing query for ${deviceId ? `deviceId: ${deviceId}` : "all devices"} to fetch 20th record from the last`);
 
     const { resources } = await container.items.query(querySpec).fetchAll();
 
@@ -1244,14 +1257,22 @@ app.get("/api/latest-data", async (req, res) => {
 
       // Update historical data (assuming this function exists)
       updateHistoricalData(result);
+
+      console.log(`Successfully fetched 20th record for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
+
+      // Return the result with status message
+      return res.json({
+        status: "SUCCESS",
+        message: `Fetched 20th record from the last${deviceId ? ` for device ${deviceId}` : ""}`,
+        data: result,
+      });
     }
 
-    // Return the result or a no-data message
-    if (result) {
-      return res.json(result);
-    }
+    console.log(`No data found at 20th position for ${deviceId ? `deviceId: ${deviceId}` : "all devices"}`);
 
+    // Return no-data message with status
     return res.status(200).json({
+      status: "NO_DATA",
       message: deviceId
         ? `No data available for device ${deviceId} at the 20th position from the last`
         : "No data available at the 20th position from the last in database",
@@ -1260,6 +1281,7 @@ app.get("/api/latest-data", async (req, res) => {
   } catch (error) {
     console.error("❌ Error in /api/latest-data:", error);
     return res.status(500).json({
+      status: "ERROR",
       error: "Failed to fetch data at 20th position from the last",
       details: error.message,
     });
