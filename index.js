@@ -1125,3 +1125,164 @@ app.get("/api/last-hour-data", async (req, res) => {
     });
   }
 });
+
+
+
+
+// Add this endpoint to your existing code
+// app.get("/api/latest-data", async (req, res) => {
+//   try {
+//     const deviceId = req.query.deviceId;
+//     let result = null;
+
+//     // 1. First try to get from in-memory queue
+//     if (latestDataQueue.length > 0) {
+//       let filteredData = latestDataQueue;
+      
+//       if (deviceId) {
+//         filteredData = latestDataQueue.filter(
+//           data => data.body && data.body.ID && data.body.ID.toString() === deviceId
+//         );
+//       }
+
+//       if (filteredData.length > 0) {
+//         result = filteredData[filteredData.length - 1];
+//       }
+//     }
+
+//     // 2. If no data in queue, fetch last available from Cosmos DB
+//     if (!result) {
+//       const query = deviceId 
+//         ? `SELECT TOP 1 * FROM c WHERE c.Body.ID = "${deviceId}" ORDER BY c._ts DESC`
+//         : `SELECT TOP 1 * FROM c ORDER BY c._ts DESC`;
+      
+//       const { resources } = await container.items.query(query).fetchAll();
+
+//       if (resources && resources.length > 0) {
+//         const latestRecord = resources[0];
+//         result = {
+//           id: latestRecord.id,
+//           timestamp: latestRecord._ts,
+//           partitionKey: latestRecord.partitionKey,
+//           body: decodeBody(latestRecord.Body) || {}
+//         };
+
+//         // Update the queue with this fresh data
+//         latestDataQueue.push(result);
+//         updateHistoricalData(result);
+//       }
+//     }
+
+//     // 3. Return whatever we found (could be from queue or DB)
+//     if (result) {
+//       return res.json(result);
+//     }
+
+//     // 4. If absolutely no data exists anywhere
+//     return res.status(200).json({ 
+//       message: deviceId 
+//         ? `No data available for device ${deviceId} in queue or database`
+//         : "No data available in queue or database"
+//     });
+
+//   } catch (error) {
+//     console.error("❌ Error in /api/latest-data:", error);
+//     res.status(500).json({ 
+//       error: "Failed to fetch latest data",
+//       details: error.message 
+//     });
+//   }
+// });
+
+
+
+
+
+
+/// applying different changes for Open House
+
+
+app.get("/api/latest-data", async (req, res) => {
+  try {
+    const deviceId = req.query.deviceId;
+
+    // Validate deviceId if provided
+    if (deviceId && !/^[a-zA-Z0-9-_]+$/.test(deviceId)) {
+      return res.status(400).json({ error: "Invalid deviceId format" });
+    }
+
+    // Query Cosmos DB for the latest record
+    const querySpec = {
+      query: deviceId
+        ? "SELECT TOP 1 * FROM c WHERE c.Body.ID = @deviceId ORDER BY c._ts DESC"
+        : "SELECT TOP 1 * FROM c ORDER BY c._ts DESC",
+      parameters: deviceId ? [{ name: "@deviceId", value: deviceId }] : [],
+    };
+
+    const { resources } = await container.items.query(querySpec).fetchAll();
+
+    let result = null;
+    if (resources && resources.length > 0) {
+      const latestRecord = resources[0];
+      const decodedBody = decodeBody(latestRecord.Body) || {};
+
+      // Ensure required fields are present, set to null if missing
+      const requiredFields = [
+        "H2",
+        "CH4",
+        "CO",
+        "Alcohol",
+        "C2H5OH",
+        "Dust Concentrati",
+        "Humidity",
+        "Temperature",
+      ];
+      const formattedBody = {};
+      requiredFields.forEach((field) => {
+        formattedBody[field] = decodedBody[field] !== undefined ? decodedBody[field] : null;
+      });
+      // Include device ID if present
+      formattedBody.ID = decodedBody.ID || deviceId || null;
+
+      result = {
+        id: latestRecord.id,
+        timestamp: latestRecord._ts,
+        partitionKey: latestRecord.partitionKey,
+        body: formattedBody,
+      };
+
+      // Update the in-memory queue
+      latestDataQueue = latestDataQueue.filter(
+        (data) => data.body && data.body.ID && data.body.ID.toString() !== deviceId
+      ); // Remove old data for this device
+      latestDataQueue.push(result);
+
+      // Limit queue size to prevent memory issues
+      const MAX_QUEUE_SIZE = 100;
+      if (latestDataQueue.length > MAX_QUEUE_SIZE) {
+        latestDataQueue.shift();
+      }
+
+      // Update historical data (assuming this function exists)
+      updateHistoricalData(result);
+    }
+
+    // Return the result or a no-data message
+    if (result) {
+      return res.json(result);
+    }
+
+    return res.status(200).json({
+      message: deviceId
+        ? `No data available for device ${deviceId} in database`
+        : "No data available in database",
+    });
+
+  } catch (error) {
+    console.error("❌ Error in /api/latest-data:", error);
+    return res.status(500).json({
+      error: "Failed to fetch latest data",
+      details: error.message,
+    });
+  }
+});
